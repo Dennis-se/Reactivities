@@ -1,30 +1,30 @@
-import React, { useContext } from "react";
+import React, { useContext, useEffect } from "react";
 import { Grid } from "semantic-ui-react";
 import ActivityList from "./ActivityList";
-import ActivityDetails from "../details/ActivityDetails";
-import ActivityForm  from "../form/ActivityForm";
 import { observer } from "mobx-react-lite";
 import ActivityStore from '../../../app/stores/activityStore';
+import { LoadingComponent } from "../../../app/layout/LoadingComponent";
 
 const ActivityDashboard: React.FC = () => {
   const activityStore = useContext(ActivityStore);
-  const {editMode, selectedActivity} = activityStore;
-  return (
+
+  useEffect(() => {
+    activityStore.loadActivities();
+  }, [activityStore]); // [] Ensure that useEffect runs one time only and not continously. useEffect runs every time it renders,
+  // ie when loadActivities is called then useEffect is called again. So it prevents an infinity loop.
+  // [activityStore] is specified as dependency.
+
+  if (activityStore.loadingInitial)
+    return <LoadingComponent content="Loading activities..." />;
+
+      return (
     <Grid>
       <Grid.Column width={10}>
         <ActivityList />
       </Grid.Column>
 
       <Grid.Column width={6}>
-        {selectedActivity && !editMode && (
-          <ActivityDetails />
-        )}
-        {editMode && (
-          <ActivityForm
-            key={(selectedActivity && selectedActivity.id) || 0} // key is here so we can render an empty form when click Create when we are in edit mode, otherwise it will still be with the data from the edit activity.
-            activity={selectedActivity!}
-          />
-        )}
+        <h2>Activity filters</h2>
       </Grid.Column>
     </Grid>
   );
