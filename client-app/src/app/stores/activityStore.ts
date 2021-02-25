@@ -6,10 +6,15 @@ import { history } from "../..";
 import { toast } from "react-toastify";
 import { RootStore } from "./rootStore";
 import { createAttendee, setActivityProps } from "../common/util/util";
+import {
+  HubConnection,
+  HubConnectionBuilder,
+  LogLevel,
+} from "@microsoft/signalr";
 
 export default class ActivityStore {
   rootStore: RootStore;
-  constructor(rootStore: RootStore){
+  constructor(rootStore: RootStore) {
     this.rootStore = rootStore;
   }
 
@@ -17,40 +22,93 @@ export default class ActivityStore {
   @observable activity: IActivity | null = null;
   @observable loadingInitial = false;
   @observable submitting = false;
-  @observable target = '';
+  @observable target = "";
   @observable loading = false;
+  @observable.ref hubConnection: HubConnection | null = null;
+
+  @action createHubConnection = (activityId: string) => {
+    this.hubConnection = new HubConnectionBuilder()
+      .withUrl("http://localhost:5000/chat", {
+        accessTokenFactory: () => this.rootStore.commonStore.token!,
+      })
+      .configureLogging(LogLevel.Information)
+      .build();
+
+    this.hubConnection
+      .start()
+      .then(() => console.log(this.hubConnection!.state))
+      .then(() => {
+        console.log('Attempting to join group');
+        this.hubConnection!.invoke('AddToGroup', activityId)
+      })
+      .catch((error) => console.log("Error establishing connection", error));
+
+      this.hubConnection.on('ReceiveComment', comment => {
+        runInAction(() => {
+          this.activity!.comments.push(comment);
+        })
+      })
+
+      this.hubConnection.on('Send', message => {
+        toast.info(message);
+      })
+  };
+
+  @action stopHubConnection = () => {
+    this.hubConnection!.invoke('RemoveFromGroup', this.activity!.id)
+      .then(() => {
+        this.hubConnection!.stop()
+      })
+      .then(() => console.log('Connection stopped'))
+      .catch(err => console.log(err))
+  }
+
+  @action addComment = async (values: any) => {
+    values.activityId = this.activity!.id;
+    try {
+      await this.hubConnection!.invoke('SendComment', values)
+    } catch (error) {
+      console.log(error)
+    }
+  }
 
   @computed get activitiesByDate() {
-    return this.groupActivitiesByDate(Array.from(this.activityRegistry.values()));
+    return this.groupActivitiesByDate(
+      Array.from(this.activityRegistry.values())
+    );
   }
 
   groupActivitiesByDate(activities: IActivity[]) {
     const sortedActivities = activities.sort(
       (a, b) => a.date.getTime() - b.date.getTime()
     );
-    return Object.entries(sortedActivities.reduce((activities, activity) => {
-      const date = activity.date.toISOString().split('T')[0];
-      activities[date] = activities[date] ? [...activities[date], activity] : [activity];
-      return activities;
-    }, {} as {[key: string]: IActivity[]}));
+    return Object.entries(
+      sortedActivities.reduce((activities, activity) => {
+        const date = activity.date.toISOString().split("T")[0];
+        activities[date] = activities[date]
+          ? [...activities[date], activity]
+          : [activity];
+        return activities;
+      }, {} as { [key: string]: IActivity[] })
+    );
   }
 
   @action loadActivities = async () => {
     this.loadingInitial = true;
     try {
       const activities = await agent.Activities.list();
-      runInAction('loading activities', () => {
+      runInAction("loading activities", () => {
         activities.forEach((activity) => {
-          setActivityProps(activity, this.rootStore.userStore.user!)
+          setActivityProps(activity, this.rootStore.userStore.user!);
           this.activityRegistry.set(activity.id, activity);
         });
       });
     } catch (error) {
       console.log(error);
     } finally {
-      runInAction('load activities finally', () => {
+      runInAction("load activities finally", () => {
         this.loadingInitial = false;
-      })
+      });
     }
   };
 
@@ -63,31 +121,29 @@ export default class ActivityStore {
       this.loadingInitial = true;
       try {
         activity = await agent.Activities.details(id);
-        runInAction('getting activity', () => {
-          setActivityProps(activity, this.rootStore.userStore.user!)
+        runInAction("getting activity", () => {
+          setActivityProps(activity, this.rootStore.userStore.user!);
           this.activity = activity;
           this.activityRegistry.set(activity.id, activity);
-        })
+        });
         return activity;
-      }
-      catch (error) {
+      } catch (error) {
         console.log(error);
-      }
-      finally {
-        runInAction('get activity finally', () => {
+      } finally {
+        runInAction("get activity finally", () => {
           this.loadingInitial = false;
-        })
+        });
       }
     }
-  }
+  };
 
   @action clearActivity = () => {
     this.activity = null;
-  }
+  };
 
   getActivity = (id: string) => {
     return this.activityRegistry.get(id);
-  }
+  };
 
   @action createActivity = async (activity: IActivity) => {
     this.submitting = true;
@@ -98,63 +154,61 @@ export default class ActivityStore {
       let attendees = [];
       attendees.push(attendee);
       activity.attendees = attendees;
+      activity.comments = [];
       activity.isHost = true;
-      runInAction('creating activity', () => {
+      runInAction("creating activity", () => {
         this.activityRegistry.set(activity.id, activity);
       });
       history.push(`/activities/${activity.id}`);
-    } 
-    catch (error) {
-      toast.error('Problem submitting data');
+    } catch (error) {
+      toast.error("Problem submitting data");
       console.log(error.response);
-    } 
-    finally {
-      runInAction('create activity finally', () => {
+    } finally {
+      runInAction("create activity finally", () => {
         this.submitting = false;
-      })
+      });
     }
   };
 
   @action editActivity = async (activity: IActivity) => {
-      this.submitting = true;
-      try {
-        await agent.Activities.update(activity);
-        runInAction('editing activity', () => {
-          this.activityRegistry.set(activity.id, activity);
-          this.activity = activity;
-        });
-        history.push(`/activities/${activity.id}`);
-      }
-      catch (error) {
-        toast.error('Problem submitting data');
-        console.log(error);
-      }
-      finally {
-        runInAction('edit activity finally', () => {
-          this.submitting = false;
-        })
-      }
-  }
+    this.submitting = true;
+    try {
+      await agent.Activities.update(activity);
+      runInAction("editing activity", () => {
+        this.activityRegistry.set(activity.id, activity);
+        this.activity = activity;
+      });
+      history.push(`/activities/${activity.id}`);
+    } catch (error) {
+      toast.error("Problem submitting data");
+      console.log(error);
+    } finally {
+      runInAction("edit activity finally", () => {
+        this.submitting = false;
+      });
+    }
+  };
 
-  @action deleteActivity = async (event: SyntheticEvent<HTMLButtonElement>, id: string) => {
+  @action deleteActivity = async (
+    event: SyntheticEvent<HTMLButtonElement>,
+    id: string
+  ) => {
     this.submitting = true;
     this.target = event.currentTarget.name;
     try {
-        await agent.Activities.delete(id);
-        runInAction('deleting activity', () => {
-          this.activityRegistry.delete(id);
-        })
-    }
-    catch(error) {
-        console.log(error);
-    }
-    finally {
-      runInAction('delete activity finally', () => {
+      await agent.Activities.delete(id);
+      runInAction("deleting activity", () => {
+        this.activityRegistry.delete(id);
+      });
+    } catch (error) {
+      console.log(error);
+    } finally {
+      runInAction("delete activity finally", () => {
         this.submitting = false;
-        this.target = '';
-      })
+        this.target = "";
+      });
     }
-  }
+  };
 
   @action attendActivity = async () => {
     const attendee = createAttendee(this.rootStore.userStore.user!);
@@ -168,14 +222,14 @@ export default class ActivityStore {
           this.activityRegistry.set(this.activity.id, this.activity);
           this.loading = false;
         }
-      })
+      });
     } catch (error) {
       runInAction(() => {
         this.loading = false;
-      })
-      toast.error('Problem signing up to activity');
+      });
+      toast.error("Problem signing up to activity");
     }
-  }
+  };
 
   @action cancelAttendance = async () => {
     this.loading = true;
@@ -184,18 +238,18 @@ export default class ActivityStore {
       runInAction(() => {
         if (this.activity) {
           this.activity.attendees = this.activity.attendees.filter(
-            a => a.username !== this.rootStore.userStore.user!.username
-          )
+            (a) => a.username !== this.rootStore.userStore.user!.username
+          );
           this.activity.isGoing = false;
           this.activityRegistry.set(this.activity.id, this.activity);
           this.loading = false;
         }
-      })
+      });
     } catch {
       runInAction(() => {
         this.loading = false;
-      })
-      toast.error('Problem cancelling attendance');
+      });
+      toast.error("Problem cancelling attendance");
     }
-  }
+  };
 }
